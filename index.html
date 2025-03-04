@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>MediaPipe Pose Estimation - Warm Design</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    /* 全体レイアウト・背景設定 */
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f7f1e3;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      justify-content: center;
+    }
+    
+    /* コンテンツ全体を囲むラッパー */
+    #wrapper {
+      max-width: 1200px;
+      width: 90%;
+      margin: 20px auto;
+      text-align: center;
+      background: #fff;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+      border-radius: 8px;
+      padding: 20px;
+    }
+    
+    header h1 {
+      color: #a0522d;
+      margin-bottom: 10px;
+    }
+    
+    header p {
+      color: #555;
+      margin-bottom: 20px;
+    }
+    
+    /* ファイルアップロード */
+    input[type="file"] {
+      margin: 20px auto;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background: #fff;
+      cursor: pointer;
+    }
+    
+    /* ボタン・リンク */
+    button, .download-link {
+      display: inline-block;
+      padding: 10px 20px;
+      margin: 10px 5px;
+      border: none;
+      border-radius: 4px;
+      text-decoration: none;
+      font-size: 16px;
+      cursor: pointer;
+      transition: background 0.3s ease;
+    }
+    
+    button {
+      background: #28a745;
+      color: white;
+    }
+    
+    button:disabled {
+      background: #ccc;
+      cursor: default;
+    }
+    
+    .download-link {
+      background: #007bff;
+      color: white;
+    }
+    
+    .download-link:hover {
+      background: #0056b3;
+    }
+    
+    #downloadAllButton:hover {
+      background: #218838;
+    }
+    
+    /* 画像一覧レイアウト */
+    #imageContainer {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 20px;
+    }
+    
+    .image-wrapper {
+      position: relative;
+      background: #faf3e0;
+      border: 1px solid #e0d4b7;
+      border-radius: 8px;
+      padding: 10px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      width: calc(33% - 40px);
+      min-width: 250px;
+      box-sizing: border-box;
+    }
+    
+    .image-wrapper img {
+      width: 100%;
+      height: auto;
+      border-radius: 4px;
+    }
+    
+    .canvas-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+      border-radius: 4px;
+    }
+    
+    /* レスポンシブ対応 */
+    @media (max-width: 768px) {
+      .image-wrapper {
+        width: calc(50% - 40px);
+      }
+    }
+    
+    @media (max-width: 480px) {
+      .image-wrapper {
+        width: 100%;
+      }
+    }
+    
+    footer {
+      margin-top: 20px;
+      color: #888;
+      font-size: 14px;
+    }
+  </style>
+  <!-- JSZipライブラリ -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.0/jszip.min.js"></script>
+</head>
+<body>
+  <div id="wrapper">
+    <header>
+      <h1>MediaPipe Pose Estimation</h1>
+      <p>アップロードした画像にAIが姿勢推定を実行し、注釈付き画像を生成します。<br>
+      個別またはまとめてダウンロードが可能です。</p>
+    </header>
+    <!-- 画像アップロード用 -->
+    <input type="file" id="imageUpload" accept="image/*" multiple>
+    <!-- まとめてダウンロードボタン -->
+    <br>
+    <button id="downloadAllButton" disabled>Download All Annotated Images</button>
+    <!-- 画像とcanvasを配置するコンテナ -->
+    <div id="imageContainer"></div>
+    <footer>
+      <p>© 2025 MediaPipe Pose Estimation Tool. All rights reserved.</p>
+    </footer>
+  </div>
+  
+  <script type="module">
+    import {
+      PoseLandmarker,
+      FilesetResolver,
+      DrawingUtils
+    } from "https://cdn.skypack.dev/@mediapipe/tasks-vision@0.10.0";
+    
+    const imageUpload = document.getElementById('imageUpload');
+    const imageContainer = document.getElementById('imageContainer');
+    const downloadAllButton = document.getElementById('downloadAllButton');
+    
+    let poseLandmarker;
+    const runningMode = "IMAGE";
+    
+    // 全画像の処理状況を管理する変数
+    let totalImages = 0;
+    let processedCount = 0;
+    const processedImages = []; // { filename: string, blob: Blob }
+    
+    // MediaPipeのPoseLandmarkerを非同期でロード
+    const createPoseLandmarker = async () => {
+      const vision = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+      );
+      poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+          delegate: "GPU"
+        },
+        runningMode: runningMode,
+        numPoses: 2
+      });
+      console.log("PoseLandmarker loaded");
+    };
+    createPoseLandmarker();
+    
+    // 「まとめてダウンロード」ボタンのクリックイベント
+    downloadAllButton.addEventListener('click', () => {
+      if (processedImages.length === 0) return;
+      const zip = new JSZip();
+      processedImages.forEach(item => {
+        zip.file(item.filename, item.blob);
+      });
+      zip.generateAsync({ type: "blob" }).then((zipBlob) => {
+        const url = URL.createObjectURL(zipBlob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "annotated_images.zip";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      });
+    });
+    
+    // 画像アップロード時の処理
+    imageUpload.addEventListener('change', function(event) {
+      // 既存の画像コンテナをクリア
+      imageContainer.innerHTML = "";
+      
+      // 状態のリセット
+      totalImages = event.target.files.length;
+      processedCount = 0;
+      processedImages.length = 0; // 配列をクリア
+      downloadAllButton.disabled = true; // 初期状態でdisabled
+      
+      const files = event.target.files;
+      if (!files.length) return;
+      
+      Array.from(files).forEach((file, index) => {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          // 各画像用のラッパーを作成
+          const wrapper = document.createElement('div');
+          wrapper.className = "image-wrapper";
+          
+          // 画像要素の作成
+          const img = document.createElement('img');
+          img.src = e.target.result;
+          wrapper.appendChild(img);
+          
+          // 個別ダウンロードリンクのプレースホルダー
+          const downloadLink = document.createElement('a');
+          downloadLink.className = "download-link";
+          downloadLink.textContent = "Download Annotated Image";
+          downloadLink.href = "#"; // 後でBlob URLを設定
+          wrapper.appendChild(downloadLink);
+          
+          // ラッパーをメインコンテナに追加
+          imageContainer.appendChild(wrapper);
+          
+          // 画像読み込み完了後、姿勢推定を実行
+          img.onload = () => {
+            detectPose(img, wrapper, downloadLink, file.name, index);
+          };
+        };
+        reader.readAsDataURL(file);
+      });
+    });
+    
+    // 姿勢検出・描画、個別ダウンロードリンク作成の処理
+    async function detectPose(imgElement, wrapper, downloadLink, originalFileName, index) {
+      if (!poseLandmarker) {
+        console.log("PoseLandmarker is not loaded yet!");
+        return;
+      }
+      
+      // 画像の自然サイズに合わせたcanvasを作成
+      const canvas = document.createElement('canvas');
+      canvas.className = "canvas-overlay";
+      canvas.width = imgElement.naturalWidth;
+      canvas.height = imgElement.naturalHeight;
+      // 表示サイズに合わせる
+      canvas.style.width = imgElement.width + "px";
+      canvas.style.height = imgElement.height + "px";
+      
+      // ラッパーにcanvasを追加
+      wrapper.appendChild(canvas);
+      const canvasCtx = canvas.getContext('2d');
+      
+      // 画像をcanvasに描画
+      canvasCtx.drawImage(imgElement, 0, 0, canvas.width, canvas.height);
+      
+      // MediaPipeによる姿勢検出
+      poseLandmarker.detect(imgElement, (result) => {
+        const drawingUtils = new DrawingUtils(canvasCtx);
+        // 各姿勢ランドマークを描画
+        for (const landmark of result.landmarks) {
+          drawingUtils.drawLandmarks(landmark, {
+            radius: (data) => data.from ? DrawingUtils.lerp(data.from.z, -0.15, 0.1, 5, 1) : 1
+          });
+          drawingUtils.drawConnectors(landmark, PoseLandmarker.POSE_CONNECTIONS);
+        }
+        // canvasの内容をBlob化し、個別ダウンロードリンクに設定
+        canvas.toBlob(function(blob) {
+          const fileName = "annotated_" + originalFileName;
+          const url = URL.createObjectURL(blob);
+          downloadLink.href = url;
+          downloadLink.download = fileName;
+          
+          // 個別処理完了した画像を記録
+          processedImages.push({ filename: fileName, blob: blob });
+          processedCount++;
+          // 全画像の処理が終われば、まとめてダウンロードボタンを有効化
+          if (processedCount === totalImages) {
+            downloadAllButton.disabled = false;
+          }
+        }, "image/png");
+      });
+    }
+  </script>
+</body>
+</html>

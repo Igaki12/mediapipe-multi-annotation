@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>MediaPipe Pose Estimation Demo</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+    }
+    .container {
+      position: relative;
+      display: inline-block;
+    }
+    /* アップロードされた画像とcanvasを重ねるためのスタイル */
+    .container img {
+      display: block;
+      max-width: 100%;
+      height: auto;
+    }
+    .canvas-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none; /* canvas上のクリックを画像へ伝える */
+    }
+    #downloadButton {
+      margin-top: 20px;
+      padding: 10px 20px;
+      background: #007bff;
+      color: white;
+      text-decoration: none;
+      border-radius: 4px;
+      display: inline-block;
+    }
+  </style>
+</head>
+<body>
+  <h1>MediaPipe Pose Estimation Demo</h1>
+  <!-- 画像アップロード用 -->
+  <input type="file" id="imageUpload" accept="image/*">
+  
+  <!-- 画像とcanvasを表示するコンテナ -->
+  <div class="container" id="imageContainer"></div>
+  
+  <!-- ダウンロードボタン -->
+  <br>
+  <a id="downloadButton" href="#" download="annotated_image.png">Download Annotated Image</a>
+  
+  <!-- MediaPipeとpose推定処理 -->
+  <script type="module">
+    import {
+      PoseLandmarker,
+      FilesetResolver,
+      DrawingUtils
+    } from "https://cdn.skypack.dev/@mediapipe/tasks-vision@0.10.0";
+    
+    const imageUpload = document.getElementById('imageUpload');
+    const imageContainer = document.getElementById('imageContainer');
+    const downloadButton = document.getElementById('downloadButton');
+    
+    let poseLandmarker;
+    const runningMode = "IMAGE";
+    
+    // MediaPipeのPoseLandmarkerを非同期でロード
+    const createPoseLandmarker = async () => {
+      const vision = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+      );
+      poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+          delegate: "GPU"
+        },
+        runningMode: runningMode,
+        numPoses: 2
+      });
+      console.log("PoseLandmarker loaded");
+    };
+    createPoseLandmarker();
+    
+    // 画像アップロード時の処理
+    imageUpload.addEventListener('change', function(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        // コンテナをクリア
+        imageContainer.innerHTML = "";
+        // 画像要素を作成して表示
+        const img = document.createElement('img');
+        img.src = e.target.result;
+        img.onload = () => {
+          // 画像の読み込みが完了したら、姿勢推定を実行
+          detectPose(img);
+        };
+        imageContainer.appendChild(img);
+      };
+      reader.readAsDataURL(file);
+    });
+    
+    // 姿勢検出と描画、ダウンロードリンク作成の処理
+    async function detectPose(imgElement) {
+      if (!poseLandmarker) {
+        console.log("PoseLandmarker is not loaded yet!");
+        return;
+      }
+      // 画像のサイズに合わせたcanvasを作成
+      const canvas = document.createElement('canvas');
+      canvas.className = "canvas-overlay";
+      canvas.width = imgElement.naturalWidth;
+      canvas.height = imgElement.naturalHeight;
+      // 表示サイズに合わせる（画像のサイズに依存）
+      canvas.style.width = imgElement.width + "px";
+      canvas.style.height = imgElement.height + "px";
+      imageContainer.appendChild(canvas);
+      const canvasCtx = canvas.getContext('2d');
+    // 画像をcanvasに描画
+    canvasCtx.drawImage(imgElement, 0, 0, canvas.width, canvas.height);
+    
+      // MediaPipeによる姿勢検出
+      poseLandmarker.detect(imgElement, (result) => {
+        const drawingUtils = new DrawingUtils(canvasCtx);
+        // 検出された全ての姿勢ランドマークについて描画
+        for (const landmark of result.landmarks) {
+          drawingUtils.drawLandmarks(landmark, {
+            radius: (data) => data.from ? DrawingUtils.lerp(data.from.z, -0.15, 0.1, 5, 1) : 1
+          });
+          drawingUtils.drawConnectors(landmark, PoseLandmarker.POSE_CONNECTIONS);
+        }
+        // canvasの内容をBlob化し、ダウンロード用aタグのhrefに設定
+        canvas.toBlob(function(blob) {
+          const url = URL.createObjectURL(blob);
+          downloadButton.href = url;
+        }, "image/png");
+      });
+    }
+  </script>
+</body>
+</html>
